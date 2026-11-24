@@ -2,10 +2,23 @@
 #include <stdlib.h>
 #include <string.h>
 
+//consts
 #define PAGE_SIZE 256
 #define NUM_PAGES 256
 #define TLB_SIZE 16
 
+//structs
+typedef struct {    //represents physical memory item
+    int physicalAddr;
+    signed char physicalMemoryByte;
+} MemoryItem;
+
+typedef struct {    //represents single TLB entry
+    int page;
+    int frame;
+} tlbEntry;
+
+//methods
 int getPageNum(int logicalAddr);
 int getOffset(int logicalAddr);
 int tlbLookup(int page);
@@ -15,37 +28,34 @@ int getFreeFrame(void);
 int selectVictimFrame(void);
 void loadPageIntoFrame(int page, int frame); 
 int handlePageFault(int page);
+MemoryItem translate(int logicalAddr);
 void initState(void);
-void writeStatistics(FILE *out);
+void writeStatistics(FILE *output);
 
+//global variables
 signed char memory[256*256];
 int pageTable[256];
 int nextFreeFrame = 0;
 FILE *backingStore;
 int totalRefs = 0;
 int pageFaults = 0;
-
-typedef struct {
-    int physicalAddr;
-    signed char physicalMemoryByte;
-} MemoryItem;
-MemoryItem translate(int logicalAddr);
+tlbEntry tlb[TLB_SIZE]; 
+int tlbNext;
+int tlbHits;
 
 int main(int argc, char *argv[]) {
     //ensures command has proper arguments
-    if (argc != 4 
-       || ((strcmp(argv[1], "256") != 0 || strcmp(argv[1], "128") != 0) 
-       && strcmp(argv[2], "BACKING_STORE.bin") != 0
-       && strcmp(argv[3], "addresses.txt") != 0)
-    ) {
-        printf("Invalid command\n");
-        printf("Instead run either of the following 2 commands:\n");
-        printf("%s 256 BACKING_STORE.bin addresses.txt\n", argv[0]);
-        printf("%s 128 BACKING_STORE.bin addresses.txt\n", argv[0]);
+    if (argc != 4) {
+        printf("Invalid command: Must pass 4 arguments\n");
         return 1;
     }
-
-    int frameCount = atoi(argv[1]);     //either 256 or 128
+    
+    int frameCount = atoi(argv[1]); //must be either 256 or 128
+    if (frameCount != 256 && frameCount != 128){    
+        printf("Frame count must be either 256 or 128. Instead is %d", frameCount);
+        return 1;
+    }
+    
     backingStore = fopen(argv[2], "rb");
     FILE *addresses = fopen(argv[3], "r");
     int addr;
@@ -64,7 +74,8 @@ int main(int argc, char *argv[]) {
         //writes into output file
         fprintf(output, "%d,%d,%d\n", addr, item.physicalAddr, item.physicalMemoryByte);
     }
-
+    writeStatistics(output);
+    
     fclose(backingStore);
     fclose(addresses);
     fclose(output);
@@ -81,11 +92,24 @@ int getOffset(int logicalAddr){
 }
 
 // TLB
-int tlbLookup(int page){
-    return 0;
+int tlbLookup(int page){    //returns frame of tlb entry where page = page
+    for (int i = 0; i < TLB_SIZE; i++){
+        if (tlb[i].page == page){
+            return tlb[i].frame;
+        }
+    }
+    
+    return -1;
 }
 
-void tlbInsert(int page, int frame){
+void tlbInsert(int page, int frame){    //inserts new entry into tlb, overwriting entry in current spot
+    tlbEntry insert;
+    insert.page = page;
+    insert.frame = frame;
+
+    tlb[tlbNext] = insert;
+    tlbNext = (tlbNext + 1) % TLB_SIZE;
+    
     return;
 }
 
@@ -126,15 +150,22 @@ MemoryItem translate(int logicalAddr){
     int pageNum = getPageNum(logicalAddr);
     int offset = getOffset(logicalAddr);
 
-    int frame = pageTable[pageNum];
-    if (frame == -1){                       // page fault
-        pageFaults++;
-        frame = nextFreeFrame++;
-        loadPageIntoFrame(pageNum, frame);
-        pageTable[pageNum] = frame;
+    int frame = tlbLookup(pageNum);
+    if (frame != -1){
+        tlbHits++;
+    }
+    else{
+        frame = pageTable[pageNum];
+        if (frame == -1){
+            pageFaults++;
+            frame = nextFreeFrame++;
+            loadPageIntoFrame(pageNum, frame);
+            pageTable[pageNum] = frame;
+        }
+        tlbInsert(pageNum, frame);
     }
 
-    int physicalAddr = frame * PAGE_SIZE + offset;
+    int physicalAddr = (frame * PAGE_SIZE) + offset;
     signed char physicalMemoryByte = memory[physicalAddr];
     totalRefs++;
 
@@ -142,13 +173,24 @@ MemoryItem translate(int logicalAddr){
 }
 
 // Output
-void initState(void){ //resets page table (-1 = entry not in memory)
+void initState(void){ //resets page table and tlb (-1 = no entry)
     for (int i = 0; i < 256; i++){
         pageTable[i] = -1;
     }
+    tlbNext = 0;
+
+    for (int i = 0; i < TLB_SIZE; i++){
+        tlb[i].page = -1;
+        tlb[i].frame = -1;
+    }
+
     return;
 }
 
-void writeStatistics(FILE *out){
+void writeStatistics(FILE *output){     //prints page fault and hit rates to csv file
+    double pageFaultRate = 100.0 * pageFaults/totalRefs;
+    double hitRate = 100.0 * tlbHits/totalRefs;
+    fprintf(output, "Page Faults Rate,%.2f%%,\n", pageFaultRate);
+    fprintf(output, "TLB Hits Rate,%.2f%%,", hitRate);
     return;
 }
