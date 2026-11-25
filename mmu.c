@@ -24,8 +24,8 @@ int getOffset(int logicalAddr);
 int tlbLookup(int page);
 void tlbInsert(int page, int frame);
 void tlbInvalidate(int page);
-int getFreeFrame(void);
-int selectVictimFrame(void);
+int getUnusedFrame(void);
+int getLRU(void);
 void loadPageIntoFrame(int page, int frame); 
 int handlePageFault(int page);
 MemoryItem translate(int logicalAddr);
@@ -42,6 +42,10 @@ int pageFaults = 0;
 tlbEntry tlb[TLB_SIZE]; 
 int tlbNext;
 int tlbHits;
+int frameCount;
+int pageInFrame[256];   //tracks which page is in each frame (-1 if empty)
+long time;
+long lastUsed[256];     //tracks time at which each frame is used
 
 int main(int argc, char *argv[]) {
     //ensures command has proper arguments
@@ -50,7 +54,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    int frameCount = atoi(argv[1]); //must be either 256 or 128
+    frameCount = atoi(argv[1]); //must be either 256 or 128
     if (frameCount != 256 && frameCount != 128){    
         printf("Frame count must be either 256 or 128. Instead is %d", frameCount);
         return 1;
@@ -113,16 +117,35 @@ void tlbInsert(int page, int frame){    //inserts new entry into tlb, overwritin
     return;
 }
 
-void tlbInvalidate(int page){
+void tlbInvalidate(int page){   //sets given page of tlb to -1
+    for (int i = 0; i < TLB_SIZE; i++){
+        if (tlb[i].page == page){
+            tlb[i].page = -1;
+        }
+    }
     return;
 }
 
 // Frames/Replacement 
-int getFreeFrame(void){
-    return 0;
+int getUnusedFrame(void){     //searches for unused frame and returns frame number 
+    for (int i = 0; i < frameCount; i++){
+        if (lastUsed[i] == -1){
+            nextFreeFrame = i;
+            return i;
+        }
+    }
+    return -1;  // returns -1 if all frames have been used already
 }
-int selectVictimFrame(void){
-    return 0;
+int getLRU(void){    //finds least recently used frame
+    long minTime;
+    int firstUsedFrame;
+    for (int i = 0; i < frameCount; i++){
+        if (lastUsed[i] != -1 && lastUsed[i] < minTime){
+            minTime = lastUsed[i];
+            firstUsedFrame = i;
+        }
+    }
+    return firstUsedFrame;
 }
 
 // Paging
@@ -141,8 +164,20 @@ void loadPageIntoFrame(int page, int frame){
     return;
 }
 
-int handlePageFault(int page){
-    return 0;
+int handlePageFault(int page){    //places page in unused frame
+    int frame = getUnusedFrame();
+
+    //if all frames are in use, clear LRU frame 
+    if (frame == -1){
+        frame = getLRU();
+        int oldPage = pageInFrame[frame];
+        tlbInvalidate(oldPage);
+        pageTable[oldPage] = -1;
+    }
+    loadPageIntoFrame(page, frame);
+    pageTable[page] = frame;
+    pageInFrame[frame] = page;
+    return frame;
 }
 
 // Translation
@@ -158,13 +193,13 @@ MemoryItem translate(int logicalAddr){
         frame = pageTable[pageNum];
         if (frame == -1){
             pageFaults++;
-            frame = nextFreeFrame++;
-            loadPageIntoFrame(pageNum, frame);
-            pageTable[pageNum] = frame;
+            frame = handlePageFault(pageNum);
         }
         tlbInsert(pageNum, frame);
     }
-
+    time++;
+    lastUsed[frame] = time;
+        
     int physicalAddr = (frame * PAGE_SIZE) + offset;
     signed char physicalMemoryByte = memory[physicalAddr];
     totalRefs++;
@@ -173,11 +208,15 @@ MemoryItem translate(int logicalAddr){
 }
 
 // Output
-void initState(void){ //resets page table and tlb (-1 = no entry)
+void initState(void){ //resets tlb and trackers (-1 = no entry)
     for (int i = 0; i < 256; i++){
         pageTable[i] = -1;
+        pageInFrame[i] = -1;
+        lastUsed[i] = -1;
     }
     tlbNext = 0;
+    time = 0;
+    nextFreeFrame = 0;
 
     for (int i = 0; i < TLB_SIZE; i++){
         tlb[i].page = -1;
