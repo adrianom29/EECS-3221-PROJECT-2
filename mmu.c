@@ -35,7 +35,6 @@ void writeStatistics(FILE *output);
 //global variables
 signed char memory[256*256];
 int pageTable[256];
-int nextFreeFrame = 0;
 FILE *backingStore;
 int totalRefs = 0;
 int pageFaults = 0;
@@ -130,12 +129,12 @@ void tlbInvalidate(int page){   //sets given page of tlb to -1
 int getUnusedFrame(void){     //searches for unused frame and returns frame number 
     for (int i = 0; i < frameCount; i++){
         if (lastUsed[i] == -1){
-            nextFreeFrame = i;
             return i;
         }
     }
     return -1;  // returns -1 if all frames have been used already
 }
+
 int getLRU(void){    //finds least recently used frame
     long minTime;
     int firstUsedFrame;
@@ -216,7 +215,6 @@ void initState(void){ //resets tlb and trackers (-1 = no entry)
     }
     tlbNext = 0;
     time = 0;
-    nextFreeFrame = 0;
 
     for (int i = 0; i < TLB_SIZE; i++){
         tlb[i].page = -1;
